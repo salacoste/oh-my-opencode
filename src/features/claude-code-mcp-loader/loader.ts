@@ -15,9 +15,14 @@ interface McpConfigPath {
   scope: McpScope
 }
 
-function getMcpConfigPaths(): McpConfigPath[] {
-  const claudeConfigDir = getClaudeConfigDir()
-  const cwd = process.cwd()
+interface GetSystemMcpServerNamesOptions {
+  claudeConfigDir?: string
+  cwd?: string
+}
+
+function getMcpConfigPaths(options?: GetSystemMcpServerNamesOptions): McpConfigPath[] {
+  const claudeConfigDir = options?.claudeConfigDir ?? getClaudeConfigDir()
+  const cwd = options?.cwd ?? process.cwd()
 
   return [
     { path: join(claudeConfigDir, ".mcp.json"), scope: "user" },
@@ -42,9 +47,9 @@ async function loadMcpConfigFile(
   }
 }
 
-export function getSystemMcpServerNames(): Set<string> {
+export function getSystemMcpServerNames(options?: GetSystemMcpServerNamesOptions): Set<string> {
   const names = new Set<string>()
-  const paths = getMcpConfigPaths()
+  const paths = getMcpConfigPaths(options)
 
   for (const { path } of paths) {
     if (!existsSync(path)) continue

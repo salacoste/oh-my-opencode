@@ -16,13 +16,16 @@ describe("getSystemMcpServerNames", () => {
 
   it("returns empty set when no .mcp.json files exist", async () => {
     // #given
+    const claudeDir = join(TEST_DIR, ".claude")
+    mkdirSync(claudeDir, { recursive: true })
+
     const originalCwd = process.cwd()
     process.chdir(TEST_DIR)
 
     try {
       // #when
       const { getSystemMcpServerNames } = await import("./loader")
-      const names = getSystemMcpServerNames()
+      const names = getSystemMcpServerNames({ claudeConfigDir: claudeDir })
 
       // #then
       expect(names).toBeInstanceOf(Set)
@@ -34,6 +37,9 @@ describe("getSystemMcpServerNames", () => {
 
   it("returns server names from project .mcp.json", async () => {
     // #given
+    const claudeDir = join(TEST_DIR, ".claude")
+    mkdirSync(claudeDir, { recursive: true })
+
     const mcpConfig = {
       mcpServers: {
         playwright: {
@@ -54,7 +60,7 @@ describe("getSystemMcpServerNames", () => {
     try {
       // #when
       const { getSystemMcpServerNames } = await import("./loader")
-      const names = getSystemMcpServerNames()
+      const names = getSystemMcpServerNames({ claudeConfigDir: claudeDir })
 
       // #then
       expect(names.has("playwright")).toBe(true)
@@ -67,7 +73,9 @@ describe("getSystemMcpServerNames", () => {
 
   it("returns server names from .claude/.mcp.json", async () => {
     // #given
-    mkdirSync(join(TEST_DIR, ".claude"), { recursive: true })
+    const claudeDir = join(TEST_DIR, ".claude")
+    mkdirSync(claudeDir, { recursive: true })
+
     const mcpConfig = {
       mcpServers: {
         memory: {
@@ -84,7 +92,7 @@ describe("getSystemMcpServerNames", () => {
     try {
       // #when
       const { getSystemMcpServerNames } = await import("./loader")
-      const names = getSystemMcpServerNames()
+      const names = getSystemMcpServerNames({ claudeConfigDir: claudeDir })
 
       // #then
       expect(names.has("memory")).toBe(true)
@@ -95,6 +103,9 @@ describe("getSystemMcpServerNames", () => {
 
   it("excludes disabled MCP servers", async () => {
     // #given
+    const claudeDir = join(TEST_DIR, ".claude")
+    mkdirSync(claudeDir, { recursive: true })
+
     const mcpConfig = {
       mcpServers: {
         playwright: {
@@ -116,7 +127,7 @@ describe("getSystemMcpServerNames", () => {
     try {
       // #when
       const { getSystemMcpServerNames } = await import("./loader")
-      const names = getSystemMcpServerNames()
+      const names = getSystemMcpServerNames({ claudeConfigDir: claudeDir })
 
       // #then
       expect(names.has("playwright")).toBe(false)
@@ -128,8 +139,9 @@ describe("getSystemMcpServerNames", () => {
 
   it("merges server names from multiple .mcp.json files", async () => {
     // #given
-    mkdirSync(join(TEST_DIR, ".claude"), { recursive: true })
-    
+    const claudeDir = join(TEST_DIR, ".claude")
+    mkdirSync(claudeDir, { recursive: true })
+
     const projectMcp = {
       mcpServers: {
         playwright: { command: "npx", args: ["@playwright/mcp@latest"] },
@@ -140,7 +152,7 @@ describe("getSystemMcpServerNames", () => {
         memory: { command: "npx", args: ["-y", "@anthropic-ai/mcp-server-memory"] },
       },
     }
-    
+
     writeFileSync(join(TEST_DIR, ".mcp.json"), JSON.stringify(projectMcp))
     writeFileSync(join(TEST_DIR, ".claude", ".mcp.json"), JSON.stringify(localMcp))
 
@@ -150,7 +162,7 @@ describe("getSystemMcpServerNames", () => {
     try {
       // #when
       const { getSystemMcpServerNames } = await import("./loader")
-      const names = getSystemMcpServerNames()
+      const names = getSystemMcpServerNames({ claudeConfigDir: claudeDir })
 
       // #then
       expect(names.has("playwright")).toBe(true)

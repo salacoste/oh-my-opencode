@@ -23,13 +23,15 @@ const TIMEOUT_MS = 30000
 export function discoverAllSkillsBlocking(dirs: string[], scopes: SkillScope[]): LoadedSkill[] {
   const signal = new Int32Array(new SharedArrayBuffer(4))
   const { port1, port2 } = new MessageChannel()
-  
+
   const worker = new Worker(new URL("./discover-worker.ts", import.meta.url), {
     workerData: { signal }
   })
 
   worker.postMessage({ port: port2 }, [port2])
-  
+
+  port1.start()
+
   const input: WorkerInput = { dirs, scopes }
   port1.postMessage(input)
 
@@ -42,7 +44,7 @@ export function discoverAllSkillsBlocking(dirs: string[], scopes: SkillScope[]):
   }
 
   const message = receiveMessageOnPort(port1)
-  
+
   worker.terminate()
   port1.close()
 

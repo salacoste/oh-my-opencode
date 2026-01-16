@@ -29,16 +29,18 @@ if (!parentPort) {
 parentPort.once("message", (data: { port: MessagePort }) => {
   const { port } = data
 
+  port.start()
+
   port.on("message", async (input: WorkerInput) => {
     try {
       const results = await Promise.all(
         input.dirs.map(dir => discoverSkillsInDirAsync(dir))
       )
-      
+
       const skills = results.flat()
-      
+
       const output: WorkerOutputSuccess = { ok: true, skills }
-      
+
       port.postMessage(output)
       Atomics.store(signal, 0, 1)
       Atomics.notify(signal, 0)
@@ -50,7 +52,7 @@ parentPort.once("message", (data: { port: MessagePort }) => {
           stack: error instanceof Error ? error.stack : undefined,
         },
       }
-      
+
       port.postMessage(output)
       Atomics.store(signal, 0, 1)
       Atomics.notify(signal, 0)
