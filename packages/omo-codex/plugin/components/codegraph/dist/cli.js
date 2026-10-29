@@ -1,16 +1,12 @@
 #!/usr/bin/env node
 var __defProp = Object.defineProperty;
-var __returnValue = (v) => v;
-function __exportSetter(name, newValue) {
-  this[name] = __returnValue.bind(null, newValue);
-}
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, {
       get: all[name],
       enumerable: true,
       configurable: true,
-      set: __exportSetter.bind(all, name)
+      set: (newValue) => all[name] = () => newValue
     });
 };
 
@@ -4003,7 +3999,7 @@ function finalize(ctx, schema) {
     result.$schema = "http://json-schema.org/draft-07/schema#";
   } else if (ctx.target === "draft-04") {
     result.$schema = "http://json-schema.org/draft-04/schema#";
-  } else if (ctx.target === "openapi-3.0") {}
+  } else if (ctx.target === "openapi-3.0") {} else {}
   if (ctx.external?.uri) {
     const id = ctx.external.registry.get(schema)?.id;
     if (!id)
@@ -4212,7 +4208,7 @@ var literalProcessor = (schema, ctx, json, _params) => {
     if (val === undefined) {
       if (ctx.unrepresentable === "throw") {
         throw new Error("Literal `undefined` cannot be represented in JSON Schema");
-      }
+      } else {}
     } else if (typeof val === "bigint") {
       if (ctx.unrepresentable === "throw") {
         throw new Error("BigInt literals cannot be represented in JSON Schema");
@@ -8626,9 +8622,6 @@ function parseJson(text) {
 
 // components/codegraph/src/hook-sweep.ts
 import { fileURLToPath } from "node:url";
-// ../../utils/src/process-sweep/family-sweeper.ts
-import { existsSync as existsSync6, mkdirSync as mkdirSync3, statSync as statSync2, utimesSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { dirname as dirname6 } from "node:path";
 
 // ../../utils/src/process-sweep/exec.ts
 import { execFile } from "node:child_process";
@@ -8765,97 +8758,90 @@ function processKillErrorMeansAlive(error) {
   return false;
 }
 
-// ../../utils/src/process-sweep/family-sweeper.ts
-var DEFAULT_GRACE_MS = 2000;
-var DEFAULT_THROTTLE_MS = 60 * 60 * 1000;
-async function runProcessFamilySweep(config2, options) {
-  const nowMs = options.nowMs ?? Date.now();
-  const dryRun = options.dryRun === true;
-  if (options.force !== true && isSweepThrottled(config2.stampFile, nowMs, options.throttleMs ?? DEFAULT_THROTTLE_MS)) {
-    return { action: "throttled", candidates: [], dryRun, failed: [], killed: [], spared: [], stampFile: config2.stampFile };
-  }
+// ../../utils/src/codegraph/daemon-lock.ts
+import { readFileSync as readFileSync5, realpathSync as realpathSync5 } from "node:fs";
+import { dirname as dirname6, join as join11, resolve as resolve6 } from "node:path";
+function parseDaemonLock(raw) {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0)
+    return null;
   try {
-    const plan = await config2.collect();
-    const { failed, killed } = dryRun ? { failed: [], killed: [] } : await killTargets(plan.killList, options, config2.familyLabel);
-    if (!dryRun)
-      writeSweepStamp(config2.stampFile, nowMs);
-    return {
-      action: "swept",
-      candidates: plan.candidates,
-      dryRun,
-      failed,
-      killed,
-      spared: plan.spared,
-      stampFile: config2.stampFile
-    };
-  } catch (error) {
-    options.log?.(`${config2.familyLabel} skipped: ${error instanceof Error ? error.message : String(error)}`);
-    return { action: "failed", candidates: [], dryRun, failed: [], killed: [], spared: [], stampFile: config2.stampFile };
-  }
-}
-async function killTargets(targets, options, familyLabel) {
-  const failed = [];
-  const killed = [];
-  const context = {
-    failed,
-    familyLabel,
-    killer: options.killer ?? createDefaultProcessKiller(options.platform),
-    log: options.log
-  };
-  for (const target of targets) {
-    const terminated = await safelyTerminate(target.pid, context);
-    if (!terminated)
-      continue;
-    await delay(options.graceMs ?? DEFAULT_GRACE_MS);
-    if (!await context.killer.isAlive(target.pid)) {
-      killed.push(target);
-      continue;
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === "object" && parsed !== null && "pid" in parsed) {
+      const pid = parsed.pid;
+      if (typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0) {
+        const record2 = parsed;
+        return {
+          pid,
+          ...typeof record2["socketPath"] === "string" ? { socketPath: record2["socketPath"] } : {},
+          ...typeof record2["startedAt"] === "number" ? { startedAt: record2["startedAt"] } : {},
+          ...typeof record2["version"] === "string" ? { version: record2["version"] } : {}
+        };
+      }
     }
-    if (await safelyKill(target.pid, context))
-      killed.push(target);
-  }
-  return { failed, killed };
-}
-async function safelyTerminate(pid, context) {
-  try {
-    await context.killer.terminate(pid);
-    return true;
+    return null;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    context.failed.push({ error: message, pid, stage: "terminate" });
-    context.log?.(`${context.familyLabel} failed to terminate pid ${pid}: ${message}`);
-    return false;
+    if (!(error instanceof SyntaxError))
+      throw error;
   }
+  const legacyPid = Number(trimmed);
+  if (Number.isSafeInteger(legacyPid) && legacyPid > 0)
+    return { pid: legacyPid };
+  return null;
 }
-async function safelyKill(pid, context) {
+function daemonLockCandidates(projectRoot) {
+  const dirs = new Set;
+  const resolved = resolve6(projectRoot);
+  collectAncestors(resolved, dirs);
+  collectAncestors(realpathIfPossible2(resolved), dirs);
+  return [...dirs].map((dir) => join11(dir, ".codegraph", "daemon.pid"));
+}
+function evaluateDaemonStaleness(pid, projectRoot) {
+  let sawLock = false;
+  for (const lockPath of daemonLockCandidates(projectRoot)) {
+    const raw = readLockIfPresent(lockPath);
+    if (raw === undefined)
+      continue;
+    if (raw === null)
+      return { stale: false, reason: "lock-unreadable" };
+    sawLock = true;
+    const lock = parseDaemonLock(raw);
+    if (lock === null)
+      return { stale: false, reason: "lock-unparseable" };
+    if (lock.pid === pid)
+      return { stale: false, reason: "lock-pid-match" };
+  }
+  return sawLock ? { stale: true, reason: "lock-pid-mismatch" } : { stale: true, reason: "lock-absent" };
+}
+function readLockIfPresent(lockPath) {
   try {
-    await context.killer.kill(pid);
-    return true;
+    return readFileSync5(lockPath, "utf8");
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    context.failed.push({ error: message, pid, stage: "kill" });
-    context.log?.(`${context.familyLabel} failed to kill pid ${pid}: ${message}`);
-    return false;
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return;
+    if (error instanceof Error && "code" in error && error.code === "ENOTDIR")
+      return;
+    return null;
   }
 }
-function isSweepThrottled(stampFile, nowMs, throttleMs) {
-  if (!existsSync6(stampFile))
-    return false;
-  return nowMs - statSync2(stampFile).mtimeMs < throttleMs;
+function collectAncestors(start, output) {
+  let current = start;
+  for (;; ) {
+    output.add(current);
+    const parent = dirname6(current);
+    if (parent === current)
+      return;
+    current = parent;
+  }
 }
-function writeSweepStamp(stampFile, nowMs) {
-  mkdirSync3(dirname6(stampFile), { recursive: true });
-  writeFileSync3(stampFile, `${new Date(nowMs).toISOString()}
-`);
-  const stampDate = new Date(nowMs);
-  utimesSync(stampFile, stampDate, stampDate);
-}
-function delay(ms) {
-  if (ms <= 0)
-    return Promise.resolve();
-  return new Promise((resolvePromise) => {
-    setTimeout(resolvePromise, ms);
-  });
+function realpathIfPossible2(path) {
+  try {
+    return realpathSync5(path);
+  } catch (error) {
+    if (error instanceof Error)
+      return path;
+    throw error;
+  }
 }
 
 // ../../utils/src/process-sweep/command-match.ts
@@ -8966,164 +8952,6 @@ function resolvePathForPlatform(value, platform) {
 function normalizeForComparison2(value, platform) {
   const normalized = value.replaceAll("\\", "/").replace(/\/+$/, "");
   return platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-// ../../utils/src/process-sweep/roots.ts
-import { existsSync as existsSync7, readdirSync as readdirSync3, realpathSync as realpathSync5 } from "node:fs";
-import { homedir as homedir7 } from "node:os";
-import { join as join11, resolve as resolve6 } from "node:path";
-function discoverCodegraphOwnedRoots(options = {}) {
-  const env = options.env ?? process.env;
-  const homeDir = options.homeDir ?? env["HOME"] ?? env["USERPROFILE"] ?? homedir7();
-  const roots = new Set;
-  addRoot(roots, options.trustedCodegraphInstallDir);
-  addRoot(roots, buildCodegraphEnv({ homeDir })[CODEGRAPH_INSTALL_DIR_ENV]);
-  addRoot(roots, join11(homeDir, ".claude", "omo"));
-  addRoot(roots, options.pluginRoot);
-  for (const root of options.extraRoots ?? [])
-    addRoot(roots, root);
-  for (const root of readCodexPluginCacheRoots(options.codexHome ?? env["CODEX_HOME"] ?? join11(homeDir, ".codex"))) {
-    addRoot(roots, root);
-  }
-  return [...roots];
-}
-function readCodexPluginCacheRoots(codexHome) {
-  const cacheRoot = join11(codexHome, "plugins", "cache");
-  if (!existsSync7(cacheRoot))
-    return [];
-  const roots = [];
-  for (const publisher of safeReadDir(cacheRoot)) {
-    if (!OMO_CODEX_PLUGIN_CACHE_PUBLISHERS.has(publisher))
-      continue;
-    const omoRoot = join11(cacheRoot, publisher, "omo");
-    if (!existsSync7(omoRoot))
-      continue;
-    for (const version2 of safeReadDir(omoRoot))
-      roots.push(join11(omoRoot, version2));
-  }
-  return roots;
-}
-function addRoot(roots, root) {
-  if (root === undefined || root.trim().length === 0)
-    return;
-  const resolved = resolve6(root);
-  roots.add(resolved);
-  roots.add(realpathIfPossible2(resolved));
-}
-function safeReadDir(path) {
-  try {
-    return readdirSync3(path, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
-  } catch (error) {
-    if (isNonFatalFsError(error))
-      return [];
-    throw error;
-  }
-}
-function realpathIfPossible2(path) {
-  try {
-    return realpathSync5(path);
-  } catch (error) {
-    if (error instanceof Error)
-      return resolve6(path);
-    throw error;
-  }
-}
-function isNonFatalFsError(error) {
-  if (!(error instanceof Error))
-    return false;
-  const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-  return typeof code === "string" && ["EACCES", "ENOENT", "ENOTDIR", "EPERM"].includes(code);
-}
-var OMO_CODEX_PLUGIN_CACHE_PUBLISHERS = new Set(["sisyphuslabs"]);
-
-// ../../utils/src/process-sweep/codegraph-sweeper.ts
-import { homedir as homedir8 } from "node:os";
-import { join as join13 } from "node:path";
-
-// ../../utils/src/codegraph/daemon-lock.ts
-import { readFileSync as readFileSync5, realpathSync as realpathSync6 } from "node:fs";
-import { dirname as dirname7, join as join12, resolve as resolve7 } from "node:path";
-function parseDaemonLock(raw) {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0)
-    return null;
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (typeof parsed === "object" && parsed !== null && "pid" in parsed) {
-      const pid = parsed.pid;
-      if (typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0) {
-        const record2 = parsed;
-        return {
-          pid,
-          ...typeof record2["socketPath"] === "string" ? { socketPath: record2["socketPath"] } : {},
-          ...typeof record2["startedAt"] === "number" ? { startedAt: record2["startedAt"] } : {},
-          ...typeof record2["version"] === "string" ? { version: record2["version"] } : {}
-        };
-      }
-    }
-    return null;
-  } catch (error) {
-    if (!(error instanceof SyntaxError))
-      throw error;
-  }
-  const legacyPid = Number(trimmed);
-  if (Number.isSafeInteger(legacyPid) && legacyPid > 0)
-    return { pid: legacyPid };
-  return null;
-}
-function daemonLockCandidates(projectRoot) {
-  const dirs = new Set;
-  const resolved = resolve7(projectRoot);
-  collectAncestors(resolved, dirs);
-  collectAncestors(realpathIfPossible3(resolved), dirs);
-  return [...dirs].map((dir) => join12(dir, ".codegraph", "daemon.pid"));
-}
-function evaluateDaemonStaleness(pid, projectRoot) {
-  let sawLock = false;
-  for (const lockPath of daemonLockCandidates(projectRoot)) {
-    const raw = readLockIfPresent(lockPath);
-    if (raw === undefined)
-      continue;
-    if (raw === null)
-      return { stale: false, reason: "lock-unreadable" };
-    sawLock = true;
-    const lock = parseDaemonLock(raw);
-    if (lock === null)
-      return { stale: false, reason: "lock-unparseable" };
-    if (lock.pid === pid)
-      return { stale: false, reason: "lock-pid-match" };
-  }
-  return sawLock ? { stale: true, reason: "lock-pid-mismatch" } : { stale: true, reason: "lock-absent" };
-}
-function readLockIfPresent(lockPath) {
-  try {
-    return readFileSync5(lockPath, "utf8");
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT")
-      return;
-    if (error instanceof Error && "code" in error && error.code === "ENOTDIR")
-      return;
-    return null;
-  }
-}
-function collectAncestors(start, output) {
-  let current = start;
-  for (;; ) {
-    output.add(current);
-    const parent = dirname7(current);
-    if (parent === current)
-      return;
-    current = parent;
-  }
-}
-function realpathIfPossible3(path) {
-  try {
-    return realpathSync6(path);
-  } catch (error) {
-    if (error instanceof Error)
-      return path;
-    throw error;
-  }
 }
 
 // ../../utils/src/process-sweep/codegraph-family.ts
@@ -9243,7 +9071,189 @@ function hasOrphanedWorkerAncestor(processInfo, ancestry) {
   }
 }
 
+// ../../utils/src/process-sweep/roots.ts
+import { existsSync as existsSync6, readdirSync as readdirSync3, realpathSync as realpathSync6 } from "node:fs";
+import { homedir as homedir7 } from "node:os";
+import { join as join12, resolve as resolve7 } from "node:path";
+function discoverCodegraphOwnedRoots(options = {}) {
+  const env = options.env ?? process.env;
+  const homeDir = options.homeDir ?? env["HOME"] ?? env["USERPROFILE"] ?? homedir7();
+  const roots = new Set;
+  addRoot(roots, options.trustedCodegraphInstallDir);
+  addRoot(roots, buildCodegraphEnv({ homeDir })[CODEGRAPH_INSTALL_DIR_ENV]);
+  addRoot(roots, join12(homeDir, ".claude", "omo"));
+  addRoot(roots, options.pluginRoot);
+  for (const root of options.extraRoots ?? [])
+    addRoot(roots, root);
+  for (const root of readCodexPluginCacheRoots(options.codexHome ?? env["CODEX_HOME"] ?? join12(homeDir, ".codex"))) {
+    addRoot(roots, root);
+  }
+  return [...roots];
+}
+function readCodexPluginCacheRoots(codexHome) {
+  const cacheRoot = join12(codexHome, "plugins", "cache");
+  if (!existsSync6(cacheRoot))
+    return [];
+  const roots = [];
+  for (const publisher of safeReadDir(cacheRoot)) {
+    if (!OMO_CODEX_PLUGIN_CACHE_PUBLISHERS.has(publisher))
+      continue;
+    const omoRoot = join12(cacheRoot, publisher, "omo");
+    if (!existsSync6(omoRoot))
+      continue;
+    for (const version2 of safeReadDir(omoRoot))
+      roots.push(join12(omoRoot, version2));
+  }
+  return roots;
+}
+function addRoot(roots, root) {
+  if (root === undefined || root.trim().length === 0)
+    return;
+  const resolved = resolve7(root);
+  roots.add(resolved);
+  roots.add(realpathIfPossible3(resolved));
+}
+function safeReadDir(path) {
+  try {
+    return readdirSync3(path, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch (error) {
+    if (isNonFatalFsError(error))
+      return [];
+    throw error;
+  }
+}
+function realpathIfPossible3(path) {
+  try {
+    return realpathSync6(path);
+  } catch (error) {
+    if (error instanceof Error)
+      return resolve7(path);
+    throw error;
+  }
+}
+function isNonFatalFsError(error) {
+  if (!(error instanceof Error))
+    return false;
+  const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+  return typeof code === "string" && ["EACCES", "ENOENT", "ENOTDIR", "EPERM"].includes(code);
+}
+var OMO_CODEX_PLUGIN_CACHE_PUBLISHERS = new Set(["sisyphuslabs"]);
+
+// ../../utils/src/process-sweep/family-sweeper.ts
+import { existsSync as existsSync7, mkdirSync as mkdirSync3, statSync as statSync2, utimesSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { dirname as dirname7 } from "node:path";
+var DEFAULT_GRACE_MS = 2000;
+var DEFAULT_THROTTLE_MS = 60 * 60 * 1000;
+async function runProcessFamilySweep(config2, options) {
+  const nowMs = options.nowMs ?? Date.now();
+  const dryRun = options.dryRun === true;
+  if (options.force !== true && isSweepThrottled(config2.stampFile, nowMs, options.throttleMs ?? DEFAULT_THROTTLE_MS)) {
+    return { action: "throttled", candidates: [], dryRun, failed: [], killed: [], spared: [], stampFile: config2.stampFile };
+  }
+  try {
+    const plan = await config2.collect();
+    const { failed, killed } = dryRun ? { failed: [], killed: [] } : await killTargets(plan.killList, options, config2);
+    if (!dryRun)
+      writeSweepStamp(config2.stampFile, nowMs);
+    return {
+      action: "swept",
+      candidates: plan.candidates,
+      dryRun,
+      failed,
+      killed,
+      spared: plan.spared,
+      stampFile: config2.stampFile
+    };
+  } catch (error) {
+    options.log?.(`${config2.familyLabel} skipped: ${error instanceof Error ? error.message : String(error)}`);
+    return { action: "failed", candidates: [], dryRun, failed: [], killed: [], spared: [], stampFile: config2.stampFile };
+  }
+}
+async function killTargets(targets, options, config2) {
+  const failed = [];
+  const killed = [];
+  const context = {
+    failed,
+    familyLabel: config2.familyLabel,
+    killer: options.killer ?? createDefaultProcessKiller(options.platform),
+    log: options.log
+  };
+  for (const target of targets) {
+    if (!await passesSignalAttestation(target, config2.attestBeforeSignal, options.log, "SIGTERM"))
+      continue;
+    const terminated = await safelyTerminate(target.pid, context);
+    if (!terminated)
+      continue;
+    await delay(options.graceMs ?? DEFAULT_GRACE_MS);
+    if (!await context.killer.isAlive(target.pid)) {
+      killed.push(target);
+      continue;
+    }
+    if (!await passesSignalAttestation(target, config2.attestBeforeSignal, options.log, "SIGKILL"))
+      continue;
+    if (await safelyKill(target.pid, context))
+      killed.push(target);
+  }
+  return { failed, killed };
+}
+async function passesSignalAttestation(target, attest, log, signal) {
+  if (attest === undefined)
+    return true;
+  try {
+    const attested = await attest(target);
+    if (!attested)
+      log?.(`process sweep sparing pid ${target.pid}: identity changed before ${signal}`);
+    return attested;
+  } catch (error) {
+    log?.(`process sweep sparing pid ${target.pid}: identity attestation failed before ${signal}: ${String(error)}`);
+    return false;
+  }
+}
+async function safelyTerminate(pid, context) {
+  try {
+    await context.killer.terminate(pid);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    context.failed.push({ error: message, pid, stage: "terminate" });
+    context.log?.(`${context.familyLabel} failed to terminate pid ${pid}: ${message}`);
+    return false;
+  }
+}
+async function safelyKill(pid, context) {
+  try {
+    await context.killer.kill(pid);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    context.failed.push({ error: message, pid, stage: "kill" });
+    context.log?.(`${context.familyLabel} failed to kill pid ${pid}: ${message}`);
+    return false;
+  }
+}
+function isSweepThrottled(stampFile, nowMs, throttleMs) {
+  if (!existsSync7(stampFile))
+    return false;
+  return nowMs - statSync2(stampFile).mtimeMs < throttleMs;
+}
+function writeSweepStamp(stampFile, nowMs) {
+  mkdirSync3(dirname7(stampFile), { recursive: true });
+  writeFileSync3(stampFile, `${new Date(nowMs).toISOString()}
+`);
+  const stampDate = new Date(nowMs);
+  utimesSync(stampFile, stampDate, stampDate);
+}
+function delay(ms) {
+  if (ms <= 0)
+    return Promise.resolve();
+  return new Promise((resolvePromise) => {
+    setTimeout(resolvePromise, ms);
+  });
+}
+
 // ../../utils/src/process-sweep/codegraph-sweeper.ts
+import { homedir as homedir8 } from "node:os";
+import { join as join13 } from "node:path";
 var CODEGRAPH_DAEMON_SWEEP_STAMP_FILE = "zombie-sweep.stamp";
 var CODEGRAPH_WORKER_SWEEP_STAMP_FILE = "worker-sweep.stamp";
 async function sweepCodegraphZombies(options = {}) {
@@ -10460,21 +10470,36 @@ function runProcessWithTreeTimeout(options) {
     };
     child.stdout.on("data", (chunk) => capture("stdout", chunk));
     child.stderr.on("data", (chunk) => capture("stderr", chunk));
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      startTermination().then(() => settle(124, child.signalCode));
-    }, options.timeoutMs);
-    timeout.unref();
+    let removeTimeoutSignal = () => {
+      return;
+    };
+    let timeout;
     const settle = async (exitCode, signal) => {
       if (settled)
         return;
       settled = true;
       clearTimeout(timeout);
+      removeTimeoutSignal();
       const termination = treeTermination === undefined ? null : await treeTermination;
       stderr += stderrDecoder.end();
       stdout += stdoutDecoder.end();
       resolvePromise({ exitCode, signal, stderr, stdout, termination, timedOut });
     };
+    const triggerTimeout = () => {
+      if (settled)
+        return;
+      timedOut = true;
+      startTermination().then(() => settle(124, child.signalCode));
+    };
+    timeout = setTimeout(triggerTimeout, options.timeoutMs);
+    timeout.unref();
+    if (options.timeoutSignal?.aborted === true) {
+      triggerTimeout();
+    } else if (options.timeoutSignal !== undefined) {
+      const timeoutSignal = options.timeoutSignal;
+      timeoutSignal.addEventListener("abort", triggerTimeout, { once: true });
+      removeTimeoutSignal = () => timeoutSignal.removeEventListener("abort", triggerTimeout);
+    }
     child.once("error", () => {
       resolveChildClosed();
       settle(1, null);
